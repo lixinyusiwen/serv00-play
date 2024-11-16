@@ -1306,6 +1306,129 @@ InitServer(){
   fi
 }
 
+manageNeZhaAgent(){
+  while true; do
+  yellow "-------------------------"
+  echo "探针管理："
+  echo "1.安装探针"
+  echo "2.升级探针"
+  echo "3.启动/重启探针"
+  echo "4.停止探针"
+  echo "5.返回主菜单"
+  echo "6.退出脚本"
+  yellow "-------------------------"
+
+  read -p "请选择:" choice
+  case $choice in 
+    1)
+      installNeZhaAgent
+      ;;
+    2)
+      updateAgent
+      ;;
+    3)
+      startAgent
+      exit 0;
+      ;;
+    4)
+      stopNeZhaAgent
+      ;;
+    5)
+      break
+      ;;
+    6) exit 0
+      ;;
+     *)
+      echo "无效选项，请重试"
+      ;;
+  esac
+ done
+ showMenu
+}
+
+updateAgent(){
+  exepath="${installpath}/serv00-play/nezha/nezha-agent"
+  if [ ! -e "$exepath" ]; then
+    red "未安装探针，请先安装！！!"
+    return
+  fi
+
+  local workedir="${installpath}/serv00-play/nezha"
+  cd $workedir
+
+  local_version="v"$(./nezha-agent -v)
+  latest_version=$(curl -sL https://github.com/nezhahq/agent/releases/latest | sed -n 's/.*tag\/\(v[0-9.]*\).*/\1/p' | head -1)
+
+  if [[ "$local_version" != "$latest_version" ]]; then
+    echo "发现新版本: $latest_version，当前版本: $local_version。正在更新..."
+    download_url="https://github.com/nezhahq/agent/releases/download/$latest_version/nezha-agent_freebsd_amd64.zip"
+
+    local filezip="nezha-agent_latest.zip"
+    curl -sL -o "$filezip" "$download_url"
+    if [[ ! -e "$filezip" || -n $(file "$filezip" | grep "text") ]]; then
+       echo "下载探针文件失败!"
+       return 
+    fi
+    local agent_runing=0
+    if checknezhaAgentAlive; then
+      stopNeZhaAgent
+      agent_runing=1
+    fi
+    unzip -o $filezip -d .
+    chmod +x ./nezha-agent
+    if [ $agent_runing -eq 1 ]; then
+      startAgent
+    fi
+    rm -rf $filezip
+    green "更新完成！新版本: $latest_version"
+  else
+    echo "已经是最新版本: $local_version"
+  fi
+  if [[ $agent_runing -eq 1 ]]; then
+     exit 0;
+  fi
+}
+
+startAgent(){
+  local workedir="${installpath}/serv00-play/nezha"
+  if [ ! -e "${workedir}" ]; then
+     red "未安装探针，请先安装！！!"
+     return
+  fi
+  cd $workedir
+  
+  local configfile="./nezha.json"
+  if [ ! -e "$configfile" ]; then
+    red "未安装探针，请先安装！！!"
+     return
+  fi
+  
+  nezha_domain=$(jq -r ".nezha_domain" $configfile)
+  nezha_port=$(jq -r ".nezha_port" $configfile)
+  nezha_pwd=$(jq -r ".nezha_pwd" $configfile)
+  tls=$(jq -r ".tls" $configfile)
+
+  if checknezhaAgentAlive; then
+      stopNeZhaAgent
+  fi
+
+  local args="--report-delay 4 --disable-auto-update --disable-force-update "
+  if [[ "$tls" == "y" ]]; then
+     args="${args} --tls "
+  fi
+
+  #echo "./nezha-agent ${args} -s ${nezha_domain}:${nezha_port} -p ${nezha_pwd}"
+  nohup ./nezha-agent ${args} -s ${nezha_domain}:${nezha_port} -p ${nezha_pwd} >/dev/null 2>&1 &
+  
+  if checknezhaAgentAlive; then
+      green "启动成功!"
+  else
+      red "启动失败!"
+  fi
+  #即便使用nohup放后台，此处如果使用ctrl+c退出脚本，nezha-agent进程也会退出。非常奇葩，因此startAgent后只能exit退出脚本，避免用户使用ctrl+c退出。
+ 
+}
+
 installNeZhaAgent(){
   local workedir="${installpath}/serv00-play/nezha"
   if [ ! -e "${workedir}" ]; then
@@ -1345,6 +1468,7 @@ installNeZhaAgent(){
     nezha_domain=$(jq -r ".nezha_domain" $config)
     nezha_port=$(jq -r ".nezha_port" $config)
     nezha_pwd=$(jq -r ".nezha_pwd" $config)
+    tls=$(jq -r ".tls" $config)
   fi
 
   if [[ -z "$nezha_domain" || -z "$nezha_port" || -z "$nezha_pwd" ]]; then
@@ -1371,10 +1495,22 @@ EOF
   fi
 
   nohup ./nezha-agent ${args} -s "${nezha_domain}:${nezha_port}" -p "${nezha_pwd}" >/dev/null 2>&1 &
-
-
   green "哪吒探针成功启动!"
   
+}
+
+uninstallAgent(){
+  read -p "确定卸载哪吒探针? [y/n] [n]:" input
+  input=${input:-n}
+
+  if [[ "$input" == "y" ]]; then
+    if checknezhaAgentAlive; then
+        stopNeZhaAgent
+    fi
+    local workedir="${installpath}/serv00-play/nezha"
+    rm -rf $workedir
+    green "卸载完毕!"
+  fi
 
 }
 
@@ -1566,22 +1702,35 @@ mtprotoServ(){
       mkdir -p dmtg
    fi
    cd dmtg
-   
-   echo "1. 安装mtproto代理"
-   echo "2. 启动mtproto代理"
-   echo "3. 停止mtproto代理"
-   read -p "请选择:" input
 
-   if [[ "$input" == "1" ]]; then
-      installMtg
-   elif [[ "$input" == "2" ]]; then
-      startMtg
-   elif [[ "$input" == "3" ]]; then
-      stopMtg
-   else
-      red "无效输入"
-      return 1
-   fi
+   while true; do
+    yellow "---------------------"
+    echo "mtproto管理:"
+    echo "1. 安装mtproto代理"
+    echo "2. 启动mtproto代理"
+    echo "3. 停止mtproto代理"
+    echo "4. 返回主菜单"
+    echo "5. 退出脚本"
+    yellow "---------------------"
+    read -p "请选择:" input
+    
+    case $input in
+      1) installMtg
+         ;;
+      2) startMtg
+         ;;
+      3) stopMtg
+         ;;
+      4)  break
+         ;;
+      5) exit 0
+         ;;
+      *)
+         echo "无效选项，请重试"
+         ;;
+    esac
+  done
+  showMenu
    
 }
 
@@ -1760,27 +1909,39 @@ resetAdminPass(){
 }
 
 alistServ(){
+  while true; do
+   yellow "----------------------"
    echo "1. 安装部署alist "
    echo "2. 启动alist"
    echo "3. 停掉alist"
    echo "4. 重置admin密码"
    echo "5. 卸载alist"
+   echo "6. 返回主菜单"
+   echo "7. 退出脚本"
+   yellow "----------------------"
    read -p "请选择:" input
 
-   if [[ "$input" == "1" ]]; then
-     installAlist
-   elif [[ "$input" == "2" ]]; then
-      startAlist
-   elif [[ "$input" == "3" ]]; then
-      stopAlist
-   elif [[ "$input" == "4" ]]; then
-      resetAdminPass
-   elif [[ "$input" == "5" ]]; then
-      uninstallAlist
-   else
-      echo "无效输入!"
-      return 
-   fi
+   case $input in
+     1) installAlist
+        ;;
+     2) startAlist
+        ;;
+     3) stopAlist
+        ;;
+     4) resetAdminPass
+        ;;
+     5) uninstallAlist
+        ;;
+     6)  break
+        ;;
+     7) exit 0
+        ;;
+     *)
+       echo "无效选项，请重试"
+      ;;
+    esac
+  done
+  showMenu
 }
 
 declare -a indexPorts
@@ -1878,24 +2039,32 @@ addPortMenu(){
 }
 
 portServ(){
-  echo "1. 删除某条端口记录"
-  echo "2. 增加一条端口记录"
-  echo "3. 返回主菜单"
-
-  read -p "请选择:" input
-  input=${input:-3}
-
-  if [[ "$input" == "3" ]]; then
-     return 
-  elif [[ "$input" == "1" ]]; then
-     delPortMenu 
-  elif [[ "$input" == "2" ]]; then
-     addPortMenu
-  else
-     echo "无效输入"
-     return 
-  fi
-  
+  while true; do
+  yellow "----------------------"
+    echo "端口管理:"
+    echo "1. 删除某条端口记录"
+    echo "2. 增加一条端口记录"
+    echo "3. 返回主菜单"
+    echo "4. 退出脚本"
+  yellow "----------------------"
+    read -p "请选择:" input
+    case $input in
+      1) delPortMenu
+        ;;
+      2) addPortMenu
+        ;;
+      3)
+        break
+        ;;
+      4)
+        exit 0
+        ;;
+      *)
+        echo "无效选项，请重试"
+        ;;
+    esac
+  done
+  showMenu
 }
 
 cronLE(){
@@ -2020,23 +2189,32 @@ EOF
 }
 
 domainSSLServ(){
-   echo "1. 抢域名证书"
-   echo "2. 配置自签证书"
-   echo "3. 返回主菜单"
-  read -p "请选择:" input
-  input=${input:-3}
-
-   if [[ "$input" == "3" ]]; then
-     return 
-  elif [[ "$input" == "1" ]]; then
-     applyLE 
-  elif [[ "$input" == "2" ]]; then
-     selfSSL
-  else
-     echo "无效输入"
-     return 
-  fi
-
+  while true; do
+    yellow "---------------------"
+    echo "域名证书管理:"
+    echo "1. 抢域名证书"
+    echo "2. 配置自签证书"
+    echo "3. 返回主菜单"
+    echo "4. 退出脚本"
+    yellow "---------------------"
+    read -p "请选择:" input
+  
+    case $input in 
+      1) applyLE
+        ;;
+      2) selfSSL
+        ;;
+      3) break
+        ;;
+      4)
+         exit 0
+         ;;
+      *) 
+        echo "无效选项，请重试"
+        ;;
+    esac 
+ done
+ showMenu
 }
 
 installRoot(){
@@ -2121,25 +2299,33 @@ uninstallRoot(){
 }
 
 rootServ(){
-  echo "1. 安装root"
-  echo "2. 进入root"
-  echo "3. 卸载root"
-  echo "4. 返回主菜单"
-  read -p "请选择:" input
-  input=${input:-3}
-
-    if [[ "$input" == "4" ]]; then
-     return 
-  elif [[ "$input" == "1" ]]; then
-     installRoot
-  elif [[ "$input" == "2" ]]; then
-     enterRoot
-  elif [[ "$input" == "3" ]]; then
-     uninstallRoot
-  else
-     echo "无效输入"
-     return 
-  fi
+  while true; do
+    yellow "---------------------"
+    echo "一键root:"
+    echo "1. 安装root"
+    echo "2. 进入root"
+    echo "3. 卸载root"
+    echo "4. 返回主菜单"
+    echo "5. 退出脚本"
+    yellow "---------------------"
+    read -p "请选择:" input
+    
+    case $input in 
+      1) installRoot
+        ;;
+      2) enterRoot
+        ;;
+      3) uninstallRoot
+        ;;
+      4) break
+        ;;
+      5) exit 0
+         ;;
+      *)  echo "无效选项，请重试"
+        ;;
+    esac 
+ done
+   showMenu
 }
 
 getUnblockIP(){
@@ -2177,7 +2363,7 @@ showMenu(){
   echo "请选择一个选项:"
 
   options=("安装/更新serv00-play项目" "运行vless"  "停止vless"  "配置vless"  "显示vless的节点信息"  "设置保活的项目" "配置sing-box" \
-          "运行sing-box" "停止sing-box" "显示sing-box节点信息" "快照恢复" "系统初始化" "设置中国时区及前置工作" "安装/启动/重启哪吒探针" "停止探针" "设置彩色开机字样" "显示本机IP" \
+          "运行sing-box" "停止sing-box" "显示sing-box节点信息" "快照恢复" "系统初始化" "设置中国时区及前置工作" "管理哪吒探针" "卸载探针" "设置彩色开机字样" "显示本机IP" \
           "mtproto代理" "alist管理" "端口管理" "域名证书管理" "一键root" "自动检测主机IP状态" "卸载" )
 
   select opt in "${options[@]}"
@@ -2230,10 +2416,10 @@ showMenu(){
            setCnTimeZone
            ;;
         14)
-           installNeZhaAgent
+           manageNeZhaAgent
            ;;
         15)
-           stopNeZhaAgent
+           uninstallAgent
            ;;
         16)
            setColorWord
